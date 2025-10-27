@@ -1,10 +1,74 @@
 """
-Scene 3: Procedural Materials - VJ Loop Animation
-Animated version with rotating camera, pulsating objects, and animated textures
+Scene 3: VJ Loop (120 BPM)
+Animated loop with beat-synced motions, lighting, and materials.
+Designed to sync with 120 BPM (house) tracks.
 """
 
 import bpy
 import math
+from math import pi
+
+# --- Tempo & Timing ---
+BPM = 120
+FPS = 30
+BEATS_PER_BAR = 4
+BARS = 8  # 8 bars = 16 seconds at 120 bpm
+BEATS_PER_SEC = BPM / 60.0
+FRAMES_PER_BEAT = int(round(FPS / BEATS_PER_SEC))  # 15 at 30 fps
+TOTAL_BEATS = BEATS_PER_BAR * BARS
+FRAME_START = 1
+FRAME_END = FRAME_START + (TOTAL_BEATS * FRAMES_PER_BEAT) - 1  # inclusive
+
+
+def beat_frame(beat_index: int) -> int:
+    """Return frame index (1-based) for a given beat index (0-based)."""
+    return FRAME_START + beat_index * FRAMES_PER_BEAT
+
+
+def is_downbeat(beat_index: int) -> bool:
+    """Downbeat at the start of each bar (every 4 beats)."""
+    return beat_index % BEATS_PER_BAR == 0
+
+
+def add_pulse_keyframes(id_block, data_path: str, base: float, peak: float, decay: float = 0.4):
+    """
+    Add quarter-note pulses for the whole loop.
+    - id_block: data owner (e.g., light.data for energy, object for scale component)
+    - data_path: RNA path (e.g., 'energy', 'Emission Strength', 'scale')
+    - base: resting value between pulses
+    - peak: value at beat
+    - decay: fraction of beat duration to return to base after peak
+    """
+    decay_frames = max(1, int(FRAMES_PER_BEAT * decay))
+    for b in range(TOTAL_BEATS + 1):
+        f = beat_frame(b)
+        # Peak on beat
+        if data_path == 'scale':
+            # Expect vector scale; keyframe all components
+            id_block.scale = (peak, peak, peak)
+            id_block.keyframe_insert(data_path=data_path, frame=f)
+            # Return to base after decay
+            id_block.scale = (base, base, base)
+            id_block.keyframe_insert(data_path=data_path, frame=min(f + decay_frames, FRAME_END))
+        else:
+            try:
+                # Some properties live on inputs, not on id_block directly
+                # Here we assume scalar props on the id_block (e.g., Light.energy)
+                setattr(id_block, data_path, peak)
+                id_block.keyframe_insert(data_path=data_path, frame=f)
+                setattr(id_block, data_path, base)
+                id_block.keyframe_insert(data_path=data_path, frame=min(f + decay_frames, FRAME_END))
+            except Exception:
+                # Fallback: ignore if property path is not valid
+                pass
+
+
+def set_linear_interpolation():
+    """Set all keyframes to linear interpolation for crisp pulses and smooth loops."""
+    for action in bpy.data.actions:
+        for fcurve in action.fcurves:
+            for kp in fcurve.keyframe_points:
+                kp.interpolation = 'LINEAR'
 
 def clear_scene():
     """Remove all objects from the scene"""
@@ -12,8 +76,11 @@ def clear_scene():
     bpy.ops.object.delete(use_global=False)
 
     # Remove all materials
-    for material in bpy.data.materials:
-        bpy.data.materials.remove(material)
+    for material in list(bpy.data.materials):
+        try:
+            bpy.data.materials.remove(material)
+        except Exception:
+            pass
 
 def create_marble_material(name, animate=False):
     """Create a procedural marble material with optional animation"""
@@ -46,8 +113,8 @@ def create_marble_material(name, animate=False):
     color_ramp.color_ramp.elements[1].color = (0.2, 0.2, 0.25, 1.0)
 
     # Configure BSDF
-    bsdf.inputs['Roughness'].default_value = 0.3
-    bsdf.inputs['Specular IOR Level'].default_value = 0.5
+    bsdf.inputs['Roughness'].default_value = 0.25
+    bsdf.inputs['Specular IOR Level'].default_value = 0.6
 
     # Link nodes
     links.new(tex_coord.outputs['Generated'], mapping.inputs['Vector'])
@@ -61,10 +128,11 @@ def create_marble_material(name, animate=False):
 
     # Animate mapping rotation for flowing marble effect
     if animate:
+        # 1 rotation per bar for subtle flow
         mapping.inputs['Rotation'].default_value[2] = 0
-        mapping.inputs['Rotation'].keyframe_insert(data_path="default_value", frame=1, index=2)
-        mapping.inputs['Rotation'].default_value[2] = math.radians(360)
-        mapping.inputs['Rotation'].keyframe_insert(data_path="default_value", frame=120, index=2)
+        mapping.inputs['Rotation'].keyframe_insert(data_path="default_value", frame=FRAME_START, index=2)
+        mapping.inputs['Rotation'].default_value[2] = math.radians(360 * BARS)
+        mapping.inputs['Rotation'].keyframe_insert(data_path="default_value", frame=FRAME_END, index=2)
 
     return mat, mapping if animate else mat
 
@@ -100,8 +168,8 @@ def create_lava_material(name, animate=False):
     color_ramp2.color_ramp.elements[1].position = 0.7
 
     # Configure BSDF for emission
-    bsdf.inputs['Roughness'].default_value = 0.8
-    bsdf.inputs['Emission Strength'].default_value = 3.0
+    bsdf.inputs['Roughness'].default_value = 0.7
+    bsdf.inputs['Emission Strength'].default_value = 2.5
 
     # Link nodes
     links.new(tex_coord.outputs['Generated'], mapping.inputs['Vector'])
@@ -117,22 +185,13 @@ def create_lava_material(name, animate=False):
 
     # Animate texture movement for flowing lava
     if animate:
+        # Slow upward flow across the whole loop
         mapping.inputs['Location'].default_value[2] = 0
-        mapping.inputs['Location'].keyframe_insert(data_path="default_value", frame=1, index=2)
+        mapping.inputs['Location'].keyframe_insert(data_path="default_value", frame=FRAME_START, index=2)
         mapping.inputs['Location'].default_value[2] = 5.0
-        mapping.inputs['Location'].keyframe_insert(data_path="default_value", frame=120, index=2)
+        mapping.inputs['Location'].keyframe_insert(data_path="default_value", frame=FRAME_END, index=2)
 
-        # Pulsating emission (2 pulses in 120 frames)
-        bsdf.inputs['Emission Strength'].default_value = 2.0
-        bsdf.inputs['Emission Strength'].keyframe_insert(data_path="default_value", frame=1)
-        bsdf.inputs['Emission Strength'].default_value = 5.0
-        bsdf.inputs['Emission Strength'].keyframe_insert(data_path="default_value", frame=30)
-        bsdf.inputs['Emission Strength'].default_value = 2.0
-        bsdf.inputs['Emission Strength'].keyframe_insert(data_path="default_value", frame=60)
-        bsdf.inputs['Emission Strength'].default_value = 5.0
-        bsdf.inputs['Emission Strength'].keyframe_insert(data_path="default_value", frame=90)
-        bsdf.inputs['Emission Strength'].default_value = 2.0
-        bsdf.inputs['Emission Strength'].keyframe_insert(data_path="default_value", frame=120)
+        # Emission: add beat-synced keyframes programmatically later (in object setup)
 
     return mat, bsdf if animate else mat
 
@@ -154,7 +213,7 @@ def create_crystal_material(name):
     output = nodes.new(type='ShaderNodeOutputMaterial')
 
     # Configure voronoi
-    voronoi_tex.inputs['Scale'].default_value = 8.0
+    voronoi_tex.inputs['Scale'].default_value = 10.0
     voronoi_tex.feature = 'DISTANCE_TO_EDGE'
 
     # Configure color ramp
@@ -163,7 +222,7 @@ def create_crystal_material(name):
 
     # Configure shaders
     glass_bsdf.inputs['IOR'].default_value = 1.6
-    glossy_bsdf.inputs['Roughness'].default_value = 0.1
+    glossy_bsdf.inputs['Roughness'].default_value = 0.08
 
     # Link nodes
     links.new(tex_coord.outputs['Generated'], voronoi_tex.inputs['Vector'])
@@ -173,7 +232,7 @@ def create_crystal_material(name):
     links.new(glass_bsdf.outputs['BSDF'], mix_shader.inputs[1])
     links.new(glossy_bsdf.outputs['BSDF'], mix_shader.inputs[2])
     links.new(mix_shader.outputs['Shader'], output.inputs['Surface'])
-    mix_shader.inputs['Fac'].default_value = 0.3
+    mix_shader.inputs['Fac'].default_value = 0.25
 
     return mat
 
@@ -193,16 +252,16 @@ def create_rusty_metal_material(name):
     output = nodes.new(type='ShaderNodeOutputMaterial')
 
     # Configure noise
-    noise_tex.inputs['Scale'].default_value = 12.0
-    noise_tex.inputs['Detail'].default_value = 15.0
+    noise_tex.inputs['Scale'].default_value = 14.0
+    noise_tex.inputs['Detail'].default_value = 18.0
 
     # Configure color ramp for rust
     color_ramp.color_ramp.elements[0].color = (0.6, 0.3, 0.1, 1.0)  # Rust
     color_ramp.color_ramp.elements[1].color = (0.4, 0.4, 0.45, 1.0)  # Metal
 
     # Configure BSDF
-    bsdf.inputs['Metallic'].default_value = 0.8
-    bsdf.inputs['Roughness'].default_value = 0.6
+    bsdf.inputs['Metallic'].default_value = 0.9
+    bsdf.inputs['Roughness'].default_value = 0.55
 
     # Link nodes
     links.new(tex_coord.outputs['Generated'], noise_tex.inputs['Vector'])
@@ -214,7 +273,7 @@ def create_rusty_metal_material(name):
     return mat
 
 def add_material_showcase_objects():
-    """Add objects to showcase different materials with animation"""
+    """Add objects to showcase different materials with beat-synced animation."""
     # Central marble column
     bpy.ops.mesh.primitive_cylinder_add(location=(0, 0, 2))
     column = bpy.context.active_object
@@ -228,18 +287,21 @@ def add_material_showcase_objects():
     lava_sphere.scale = (1.2, 1.2, 1.2)
     mat, bsdf = create_lava_material("Lava", animate=True)
     lava_sphere.data.materials.append(mat)
-
-    # Animate scale pulsation (2 pulses in 120 frames)
-    lava_sphere.scale = (1.0, 1.0, 1.0)
-    lava_sphere.keyframe_insert(data_path="scale", frame=1)
-    lava_sphere.scale = (1.4, 1.4, 1.4)
-    lava_sphere.keyframe_insert(data_path="scale", frame=30)
-    lava_sphere.scale = (1.0, 1.0, 1.0)
-    lava_sphere.keyframe_insert(data_path="scale", frame=60)
-    lava_sphere.scale = (1.4, 1.4, 1.4)
-    lava_sphere.keyframe_insert(data_path="scale", frame=90)
-    lava_sphere.scale = (1.0, 1.0, 1.0)
-    lava_sphere.keyframe_insert(data_path="scale", frame=120)
+    # Beat-synced pulses (downbeat heavier) for scale and emission
+    add_pulse_keyframes(lava_sphere, 'scale', base=1.0, peak=1.35, decay=0.35)
+    # Emission strength lives on the BSDF input; keyframe via node input default_value
+    try:
+        bsdf.inputs['Emission Strength'].default_value = 2.0
+        for b in range(TOTAL_BEATS + 1):
+            f = beat_frame(b)
+            strength = 6.0 if is_downbeat(b) else 4.0
+            bsdf.inputs['Emission Strength'].default_value = strength
+            bsdf.inputs['Emission Strength'].keyframe_insert(data_path="default_value", frame=f)
+            # quick falloff
+            bsdf.inputs['Emission Strength'].default_value = 2.0
+            bsdf.inputs['Emission Strength'].keyframe_insert(data_path="default_value", frame=min(f + int(FRAMES_PER_BEAT * 0.3), FRAME_END))
+    except Exception:
+        pass
 
     # Crystal formation with rotation
     crystals = []
@@ -255,11 +317,11 @@ def add_material_showcase_objects():
         crystal.rotation_euler = (0, 0, i * 0.5)
         crystal.data.materials.append(create_crystal_material(f"Crystal_{i}"))
 
-        # Animate rotation
+        # Slow rotation across the full loop
         crystal.rotation_euler = (0, 0, i * 0.5)
-        crystal.keyframe_insert(data_path="rotation_euler", frame=1)
+        crystal.keyframe_insert(data_path="rotation_euler", frame=FRAME_START)
         crystal.rotation_euler = (0, 0, i * 0.5 + math.radians(360))
-        crystal.keyframe_insert(data_path="rotation_euler", frame=120)
+        crystal.keyframe_insert(data_path="rotation_euler", frame=FRAME_END)
 
         crystals.append(crystal)
 
@@ -275,12 +337,16 @@ def add_material_showcase_objects():
         cube.rotation_euler = (math.radians(45), 0, math.radians(45 * i))
         cube.data.materials.append(create_rusty_metal_material(f"RustyMetal_{i}"))
 
-        # Animate rotation on multiple axes
+        # Animate rotation on multiple axes across the loop
         start_rot = (math.radians(45), 0, math.radians(45 * i))
         cube.rotation_euler = start_rot
-        cube.keyframe_insert(data_path="rotation_euler", frame=1)
-        cube.rotation_euler = (start_rot[0] + math.radians(360), start_rot[1] + math.radians(180), start_rot[2] + math.radians(360))
-        cube.keyframe_insert(data_path="rotation_euler", frame=120)
+        cube.keyframe_insert(data_path="rotation_euler", frame=FRAME_START)
+        cube.rotation_euler = (
+            start_rot[0] + math.radians(360),
+            start_rot[1] + math.radians(180),
+            start_rot[2] + math.radians(360),
+        )
+        cube.keyframe_insert(data_path="rotation_euler", frame=FRAME_END)
 
     # Ground plane with marble
     bpy.ops.mesh.primitive_plane_add(location=(0, 0, 0))
@@ -290,35 +356,29 @@ def add_material_showcase_objects():
     plane.data.materials.append(mat)
 
 def setup_lighting():
-    """Setup three-point lighting with subtle animation"""
+    """Setup three-point lighting with beat-synced animation."""
     # Key light
     bpy.ops.object.light_add(type='SUN', location=(5, -5, 10))
     key_light = bpy.context.active_object
-    key_light.data.energy = 3.0
+    key_light.data.energy = 2.8
     key_light.rotation_euler = (math.radians(45), 0, math.radians(45))
 
     # Fill light with pulsation
     bpy.ops.object.light_add(type='AREA', location=(-4, -3, 6))
     fill_light = bpy.context.active_object
-    fill_light.data.energy = 200
+    fill_light.data.energy = 180
     fill_light.data.size = 4
-
-    # Animate fill light intensity
-    fill_light.data.energy = 150
-    fill_light.data.keyframe_insert(data_path="energy", frame=1)
-    fill_light.data.energy = 250
-    fill_light.data.keyframe_insert(data_path="energy", frame=60)
-    fill_light.data.energy = 150
-    fill_light.data.keyframe_insert(data_path="energy", frame=120)
+    # Beat-synced pulses for fill light (accent downbeats)
+    add_pulse_keyframes(fill_light.data, 'energy', base=120.0, peak=240.0, decay=0.35)
 
     # Rim light
     bpy.ops.object.light_add(type='AREA', location=(2, 5, 4))
     rim_light = bpy.context.active_object
-    rim_light.data.energy = 150
+    rim_light.data.energy = 140
     rim_light.data.size = 3
 
 def setup_camera():
-    """Setup camera with circular rotation animation"""
+    """Setup camera with circular rotation animation synced to bars."""
     bpy.ops.object.camera_add(location=(6, -6, 4))
     camera = bpy.context.active_object
     camera.rotation_euler = (math.radians(70), 0, math.radians(45))
@@ -336,12 +396,13 @@ def setup_camera():
     constraint.track_axis = 'TRACK_NEGATIVE_Z'
     constraint.up_axis = 'UP_Y'
 
-    # Animate camera rotating around the scene
+    # Animate camera rotating around the scene over the whole loop
     radius = 8.5
     height = 4
-
-    for frame in [1, 30, 60, 90, 120]:
-        angle = (frame - 1) / 120.0 * 2 * math.pi
+    # Quarter-turn every 2 bars (8 beats), full 360 over 8 bars
+    for bar in range(BARS + 1):
+        frame = beat_frame(bar * BEATS_PER_BAR)
+        angle = (bar / BARS) * 2 * math.pi
         x = radius * math.cos(angle)
         y = radius * math.sin(angle)
         camera.location = (x, y, height)
@@ -367,31 +428,95 @@ def create_scene():
     # Configure render settings for animation
     scene = bpy.context.scene
     scene.render.engine = 'CYCLES'
-    scene.cycles.samples = 64  # Optimized for VJ loop
+    scene.cycles.samples = 64  # Quick preview; will raise for final
+    # Enable denoising at View Layer level for cleaner output
+    try:
+        bpy.context.view_layer.cycles.use_denoising = True
+    except Exception:
+        try:
+            scene.view_layers[0].cycles.use_denoising = True
+        except Exception:
+            pass
     scene.render.resolution_x = 1920
     scene.render.resolution_y = 1080
-    scene.render.fps = 30
-    scene.frame_start = 1
-    scene.frame_end = 120  # 4 second loop at 30fps
+    scene.render.fps = FPS
+    scene.frame_start = FRAME_START
+    scene.frame_end = FRAME_END
 
-    # Set interpolation to linear for smooth loops
-    for fcurve in bpy.data.actions[0].fcurves if bpy.data.actions else []:
-        for keyframe in fcurve.keyframe_points:
-            keyframe.interpolation = 'LINEAR'
+    # Set interpolation to linear for crisp pulses and ensure loops
+    set_linear_interpolation()
 
     # Set world background
     world = bpy.data.worlds['World']
     world.use_nodes = True
     bg_node = world.node_tree.nodes['Background']
-    bg_node.inputs['Color'].default_value = (0.05, 0.05, 0.1, 1.0)  # Darker for VJ vibe
-    bg_node.inputs['Strength'].default_value = 0.3
+    bg_node.inputs['Color'].default_value = (0.04, 0.04, 0.09, 1.0)  # Slightly deeper
+    bg_node.inputs['Strength'].default_value = 0.25
+
+    # Beat-synced subtle world brightness pulse for cohesion
+    for b in range(TOTAL_BEATS + 1):
+        f = beat_frame(b)
+        bg_node.inputs['Strength'].default_value = 0.45 if is_downbeat(b) else 0.3
+        bg_node.inputs['Strength'].keyframe_insert(data_path="default_value", frame=f)
+        bg_node.inputs['Strength'].default_value = 0.25
+        bg_node.inputs['Strength'].keyframe_insert(data_path="default_value", frame=min(f + int(FRAMES_PER_BEAT * 0.4), FRAME_END))
 
     print("VJ Loop Scene assembly complete!")
-    print("Animation: 120 frames (4 seconds at 30fps)")
+    print(f"Animation: {scene.frame_end - scene.frame_start + 1} frames ({(TOTAL_BEATS/BEATS_PER_BAR)} bars at {BPM} BPM)")
 
-    # Save the blend file
-    bpy.ops.wm.save_as_mainfile(filepath="/Users/jaspergilley/Blender/scene_03_vj_loop.blend")
-    print("Saved to scene_03_vj_loop.blend")
+    # Save the blend file at project root
+    try:
+        bpy.ops.wm.save_as_mainfile(filepath="scene_03_vj_loop.blend")
+        print("Saved to scene_03_vj_loop.blend")
+    except Exception:
+        pass
+
+    # Compositor: add gentle bloom/glare for emissive hits
+    try:
+        scene.use_nodes = True
+        nt = scene.node_tree
+        nt.nodes.clear()
+        n_rl = nt.nodes.new(type='CompositorNodeRLayers')
+        n_glare = nt.nodes.new(type='CompositorNodeGlare')
+        n_glare.glare_type = 'FOG_GLOW'
+        n_glare.quality = 'HIGH'
+        n_glare.size = 6
+        n_glare.mix = 0.2
+        n_glare.threshold = 0.6
+        n_comp = nt.nodes.new(type='CompositorNodeComposite')
+        nt.links.new(n_rl.outputs['Image'], n_glare.inputs['Image'])
+        nt.links.new(n_glare.outputs['Image'], n_comp.inputs['Image'])
+    except Exception:
+        pass
+
+def render_animation(output_path: str, fps: int = FPS, preview: bool = False):
+    """Configure output and render animation to a video file.
+    - output_path: path without extension or full path depending on format
+    - preview: if True, reduce samples for speed
+    """
+    scene = bpy.context.scene
+    if preview:
+        if scene.render.engine == 'CYCLES':
+            scene.cycles.samples = 16
+    else:
+        if scene.render.engine == 'CYCLES':
+            scene.cycles.samples = max(scene.cycles.samples, 128)
+    scene.render.fps = fps
+    scene.render.image_settings.file_format = 'FFMPEG'
+    scene.render.ffmpeg.format = 'MPEG4'
+    scene.render.ffmpeg.codec = 'H264'
+    scene.render.ffmpeg.constant_rate_factor = 'HIGH'
+    scene.render.ffmpeg.ffmpeg_preset = 'GOOD'
+    scene.render.ffmpeg.gopsize = fps * 2
+    scene.render.ffmpeg.max_b_frames = 2
+    scene.render.ffmpeg.audio_codec = 'AAC'
+    scene.render.ffmpeg.audio_bitrate = 192
+    scene.render.use_file_extension = True
+    scene.render.filepath = output_path
+    print(f"Rendering animation to: {output_path}")
+    bpy.ops.render.render(animation=True)
 
 if __name__ == "__main__":
     create_scene()
+    # Default to render a preview file for quick iteration; caller can re-run for final
+    render_animation(output_path="outputs/vj_loop_120bpm_preview.mp4", preview=True)
